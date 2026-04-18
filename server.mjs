@@ -36,6 +36,7 @@ let lastSweepTime = null;  // Timestamp of last sweep
 let sweepStartedAt = null; // Timestamp when current/last sweep started
 let sweepInProgress = false;
 const startTime = Date.now();
+const MAX_PRELOAD_AGE_MS = 30 * 60 * 1000;
 const sseClients = new Set();
 
 // === Delta/Memory ===
@@ -515,7 +516,18 @@ app.get('/', (req, res) => {
 // API: current data
 app.get('/api/data', (req, res) => {
   if (!currentData) return res.status(503).json({ error: 'No data yet — first sweep in progress' });
-  res.json(currentData);
+  const freshnessTs = lastSweepTime || currentData?.meta?.timestamp || null;
+  const freshnessMs = freshnessTs ? new Date(freshnessTs).getTime() : NaN;
+  const ageMs = Number.isFinite(freshnessMs) ? Math.max(0, Date.now() - freshnessMs) : null;
+  res.json({
+    ...currentData,
+    _freshness: {
+      lastSweepTime,
+      sweepStartedAt,
+      sweepInProgress,
+      ageMs,
+    },
+  });
 });
 
 // API: health check
@@ -728,10 +740,20 @@ async function start() {
     // Try to load existing data first for instant display (await so dashboard shows immediately)
     try {
       const existing = JSON.parse(readFileSync(join(RUNS_DIR, 'latest.json'), 'utf8'));
-      const data = await synthesize(existing);
-      currentData = data;
-      console.log('[Crucix] Loaded existing data from runs/latest.json — dashboard ready instantly');
-      broadcast({ type: 'update', data: currentData });
+      const existingTimestamp = existing?.crucix?.timestamp || existing?.meta?.timestamp || null;
+      const existingMs = existingTimestamp ? new Date(existingTimestamp).getTime() : NaN;
+      const isFreshEnough = Number.isFinite(existingMs) && (Date.now() - existingMs) <= MAX_PRELOAD_AGE_MS;
+
+      if (isFreshEnough) {
+        const data = await synthesize(existing);
+        currentData = data;
+        console.log('[Crucix] Loaded existing data from runs/latest.json — dashboard ready instantly');
+        broadcast({ type: 'update', data: currentData });
+      } else if (existingTimestamp) {
+        console.log(`[Crucix] Existing data is stale (${existingTimestamp}) — waiting for fresh sweep`);
+      } else {
+        console.log('[Crucix] Existing data missing timestamp — waiting for fresh sweep');
+      }
     } catch {
       console.log('[Crucix] No existing data found — first sweep required');
     }

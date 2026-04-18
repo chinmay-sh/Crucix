@@ -1702,6 +1702,19 @@ function reinit(){
   plotMarkers();
 }
 
+function getDataTimestamp(data){
+  const ts = data?._freshness?.lastSweepTime || data?.meta?.timestamp;
+  if (!ts) return null;
+  const ms = new Date(ts).getTime();
+  return Number.isFinite(ms) ? ms : null;
+}
+
+async function fetchLatestData(){
+  const r = await fetch('/api/data');
+  if (!r.ok) throw new Error(`API error ${r.status}`);
+  return r.json();
+}
+
 // === SSE: Live Updates from Server ===
 function connectSSE(){
   if (typeof EventSource === 'undefined') return;
@@ -1728,9 +1741,20 @@ function connectSSE(){
     } catch {}
   };
   es.onerror = () => {
+    const knownTs = getDataTimestamp(D);
     // Reconnect after 5s on error
     es.close();
-    setTimeout(connectSSE, 5000);
+    setTimeout(async () => {
+      connectSSE();
+      try {
+        const latest = await fetchLatestData();
+        const latestTs = getDataTimestamp(latest);
+        if (!knownTs || (latestTs && latestTs > knownTs)) {
+          D = latest;
+          reinit();
+        }
+      } catch {}
+    }, 5000);
   };
 }
 
@@ -1763,14 +1787,12 @@ document.addEventListener('DOMContentLoaded', () => {
   const hasInlineData = !!(D && D.meta);
   const canProbeApi = location.protocol !== 'file:';
 
-  if (canProbeApi && !hasInlineData) {
-    // Server mode: always fetch live data from API (ignore any stale inline D)
-    fetch('/api/data')
-      .then(r => r.json())
+  if (canProbeApi) {
+    // Server mode: always fetch live data from API
+    fetchLatestData()
       .then(data => { D = data; init(); connectSSE(); })
       .catch(() => {
-        // Should not reach here — server routes to loading.html when no data
-        if (D && D.meta) { init(); connectSSE(); }
+        if (hasInlineData) { init(); connectSSE(); }
       });
   } else if (hasInlineData) {
     // File mode: use inline data
