@@ -427,10 +427,24 @@ export async function synthesize(data) {
   }));
   const tgData = data.sources.Telegram || {};
   const tgUrgent = (tgData.urgentPosts || []).filter(p => isEnglish(p.text)).map(p => ({
-    channel: p.channel, text: p.text?.substring(0, 200), views: p.views, date: p.date, urgentFlags: p.urgentFlags || []
+    channel: p.channel,
+    text: p.text || '',
+    fullText: p.text || '',
+    previewText: p.text?.substring(0, 200) || '',
+    views: p.views,
+    date: p.date,
+    urgentFlags: p.urgentFlags || [],
+    url: sanitizeExternalUrl(p.url)
   }));
   const tgTop = (tgData.topPosts || []).filter(p => isEnglish(p.text)).map(p => ({
-    channel: p.channel, text: p.text?.substring(0, 200), views: p.views, date: p.date, urgentFlags: []
+    channel: p.channel,
+    text: p.text || '',
+    fullText: p.text || '',
+    previewText: p.text?.substring(0, 200) || '',
+    views: p.views,
+    date: p.date,
+    urgentFlags: p.urgentFlags || [],
+    url: sanitizeExternalUrl(p.url)
   }));
   const who = (data.sources.WHO?.diseaseOutbreakNews || []).slice(0, 10).map(w => ({
     title: w.title?.substring(0, 120), date: w.date, summary: w.summary?.substring(0, 150)
@@ -646,7 +660,7 @@ function buildNewsFeed(rssNews, gdeltData, tgUrgent, tgTop) {
     const text = (p.text || '').replace(/[\u{1F1E0}-\u{1F1FF}]/gu, '').trim();
     feed.push({
       headline: text.substring(0, 100), source: p.channel?.toUpperCase() || 'TELEGRAM',
-      type: 'telegram', timestamp: p.date, region: 'OSINT', urgent: true
+      type: 'telegram', timestamp: p.date, region: 'OSINT', urgent: true, url: sanitizeExternalUrl(p.url)
     });
   }
 
@@ -655,7 +669,7 @@ function buildNewsFeed(rssNews, gdeltData, tgUrgent, tgTop) {
     const text = (p.text || '').replace(/[\u{1F1E0}-\u{1F1FF}]/gu, '').trim();
     feed.push({
       headline: text.substring(0, 100), source: p.channel?.toUpperCase() || 'TELEGRAM',
-      type: 'telegram', timestamp: p.date, region: 'OSINT', urgent: false
+      type: 'telegram', timestamp: p.date, region: 'OSINT', urgent: false, url: sanitizeExternalUrl(p.url)
     });
   }
 
