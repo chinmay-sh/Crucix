@@ -27,10 +27,16 @@
     "npm": ">=10"
   },
   "dependencies": {
-    "express": "^5.1.0"
+    "@cfworker/json-schema": "^4.1.1",
+    "@modelcontextprotocol/node": "^2.0.0-alpha.2",
+    "@modelcontextprotocol/server": "^2.0.0-alpha.2",
+    "express": "^5.1.0",
+    "zod": "^4.3.6"
   },
   "optionalDependencies": {
-    "discord.js": "^14.25.1"  },
+    "discord.js": "^14.25.1"
+  },
   "overrides": {
-    "undici": "^7.24.4"  }
+    "undici": "^7.24.4"
+  }
 }

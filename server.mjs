@@ -3,6 +3,9 @@
 // Serves the Jarvis dashboard, runs sweep cycle, pushes live updates via SSE
 
 import express from 'express';
+import { McpServer } from '@modelcontextprotocol/server';
+import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node';
+import * as z from 'zod';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -234,7 +237,263 @@ if (discordAlerter.isConfigured) {
 
 // === Express Server ===
 const app = express();
+app.use(express.json({ limit: '1mb' }));
 app.use(express.static(join(ROOT, 'dashboard/public')));
+
+const MCP_ALLOWED_DOMAINS = ['conflict', 'economic', 'space', 'health', 'weather'];
+
+function requireCurrentData() {
+  if (!currentData) {
+    const err = new Error('No data yet — first sweep in progress');
+    err.code = 'NO_DATA';
+    throw err;
+  }
+  return currentData;
+}
+
+function getDomainPayload(domain, data) {
+  const domainMap = {
+    conflict: {
+      acled: data.acled,
+      gdelt: data.gdelt,
+      tg: data.tg,
+      thermal: data.thermal,
+      air: data.air,
+      chokepoints: data.chokepoints,
+      defense: data.defense,
+    },
+    economic: {
+      fred: data.fred,
+      energy: data.energy,
+      metals: data.metals,
+      bls: data.bls,
+      treasury: data.treasury,
+      gscpi: data.gscpi,
+      markets: data.markets,
+    },
+    space: {
+      space: data.space,
+    },
+    health: {
+      who: data.who,
+      epa: data.epa,
+      nuke: data.nuke,
+      nukeSignals: data.nukeSignals,
+      health: data.health,
+    },
+    weather: {
+      noaa: data.noaa,
+      thermal: data.thermal,
+    },
+  };
+
+  return {
+    domain,
+    timestamp: data.meta?.timestamp || lastSweepTime || null,
+    deltaSummary: data.delta?.summary || null,
+    data: domainMap[domain],
+  };
+}
+
+function rankBriefSignals(delta) {
+  const toScored = [];
+
+  for (const signal of delta?.signals?.new || []) {
+    toScored.push({
+      category: 'new',
+      severity: signal.severity || 'critical',
+      payload: signal,
+      score: 400,
+    });
+  }
+
+  for (const signal of delta?.signals?.escalated || []) {
+    const severityBoost = signal.severity === 'critical' ? 300 : signal.severity === 'high' ? 250 : 200;
+    toScored.push({
+      category: 'escalated',
+      severity: signal.severity || 'moderate',
+      payload: signal,
+      score: severityBoost,
+    });
+  }
+
+  for (const signal of delta?.signals?.deescalated || []) {
+    const severityBoost = signal.severity === 'critical' ? 180 : signal.severity === 'high' ? 150 : 120;
+    toScored.push({
+      category: 'deescalated',
+      severity: signal.severity || 'moderate',
+      payload: signal,
+      score: severityBoost,
+    });
+  }
+
+  return toScored
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 5)
+    .map((item) => ({
+      category: item.category,
+      severity: item.severity,
+      signal: item.payload,
+    }));
+}
+
+function getBriefPayload(data) {
+  const delta = data.delta || null;
+  const vix = data.fred?.find((f) => f.id === 'VIXCLS')?.value ?? null;
+
+  if (data.ideasSource === 'llm' && Array.isArray(data.ideas) && data.ideas.length > 0) {
+    return {
+      type: 'llm',
+      timestamp: data.meta?.timestamp || lastSweepTime || null,
+      ideasSource: data.ideasSource,
+      summary: {
+        direction: delta?.summary?.direction || 'mixed',
+        totalChanges: delta?.summary?.totalChanges || 0,
+        criticalChanges: delta?.summary?.criticalChanges || 0,
+        urgentSignals: data.tg?.urgent?.length || 0,
+        vix,
+        wti: data.energy?.wti ?? null,
+        brent: data.energy?.brent ?? null,
+        gold: data.metals?.gold ?? null,
+      },
+      ideas: data.ideas.slice(0, 5),
+    };
+  }
+
+  return {
+    type: 'signals',
+    timestamp: data.meta?.timestamp || lastSweepTime || null,
+    ideasSource: data.ideasSource || 'disabled',
+    summary: {
+      direction: delta?.summary?.direction || 'mixed',
+      totalChanges: delta?.summary?.totalChanges || 0,
+      criticalChanges: delta?.summary?.criticalChanges || 0,
+      urgentSignals: data.tg?.urgent?.length || 0,
+      vix,
+      wti: data.energy?.wti ?? null,
+      brent: data.energy?.brent ?? null,
+      gold: data.metals?.gold ?? null,
+    },
+    topSignals: rankBriefSignals(delta),
+  };
+}
+
+const mcpServer = new McpServer({ name: 'crucix-mcp', version: '1.0.0' });
+
+mcpServer.registerTool(
+  'get_intelligence',
+  {
+    description: 'Return the full latest Crucix synthesized intelligence blob.',
+    annotations: { readOnlyHint: true, idempotentHint: true },
+  },
+  async () => {
+    try {
+      const data = requireCurrentData();
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(data),
+          },
+        ],
+        structuredContent: data,
+      };
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: err.message || 'No data available' }],
+        isError: true,
+      };
+    }
+  }
+);
+
+mcpServer.registerTool(
+  'get_delta',
+  {
+    description: 'Return changes since the previous sweep, including escalations and new signals.',
+    annotations: { readOnlyHint: true, idempotentHint: true },
+  },
+  async () => {
+    try {
+      const data = requireCurrentData();
+      const payload = data.delta || null;
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(payload),
+          },
+        ],
+        structuredContent: payload,
+      };
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: err.message || 'No data available' }],
+        isError: true,
+      };
+    }
+  }
+);
+
+mcpServer.registerTool(
+  'get_domain',
+  {
+    description: 'Return intelligence filtered to one domain: conflict, economic, space, health, or weather.',
+    inputSchema: z.object({ domain: z.enum(MCP_ALLOWED_DOMAINS) }),
+    annotations: { readOnlyHint: true, idempotentHint: true },
+  },
+  async ({ domain }) => {
+    try {
+      const data = requireCurrentData();
+      const payload = getDomainPayload(domain, data);
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(payload),
+          },
+        ],
+        structuredContent: payload,
+      };
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: err.message || 'No data available' }],
+        isError: true,
+      };
+    }
+  }
+);
+
+mcpServer.registerTool(
+  'get_brief',
+  {
+    description: 'Return Crucix LLM-generated brief if available, otherwise top-5 signal fallback.',
+    annotations: { readOnlyHint: true, idempotentHint: true },
+  },
+  async () => {
+    try {
+      const data = requireCurrentData();
+      const payload = getBriefPayload(data);
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(payload),
+          },
+        ],
+        structuredContent: payload,
+      };
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: err.message || 'No data available' }],
+        isError: true,
+      };
+    }
+  }
+);
+
+const mcpStatelessTransport = new NodeStreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+let mcpConnected = false;
 
 // Serve loading page until first sweep completes, then the dashboard with injected locale
 app.get('/', (req, res) => {
@@ -286,6 +545,30 @@ app.get('/api/locales', (req, res) => {
     current: currentLanguage,
     supported: getSupportedLocales(),
   });
+});
+
+// MCP endpoint (official MCP SDK transport)
+app.all('/mcp', async (req, res) => {
+  try {
+    if (!mcpConnected) {
+      await mcpServer.connect(mcpStatelessTransport);
+      mcpConnected = true;
+    }
+
+    await mcpStatelessTransport.handleRequest(req, res, req.body);
+  } catch (err) {
+    console.error('[Crucix MCP] Request handling error:', err?.stack || err?.message || err);
+    if (!res.headersSent) {
+      res.status(500).json({
+        jsonrpc: '2.0',
+        error: {
+          code: -32603,
+          message: err?.message || 'Internal error',
+        },
+        id: null,
+      });
+    }
+  }
 });
 
 // SSE: live updates
