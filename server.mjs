@@ -696,20 +696,16 @@ async function runSweepCycle() {
 async function start() {
   const port = config.port;
 
-  console.log(`
-  ╔══════════════════════════════════════════════╗
-  ║           CRUCIX INTELLIGENCE ENGINE         ║
-  ║          Local Palantir · 26 Sources         ║
-  ╠══════════════════════════════════════════════╣
-  ║  Dashboard:  http://localhost:${port}${' '.repeat(14 - String(port).length)}║
-  ║  Health:     http://localhost:${port}/api/health${' '.repeat(4 - String(port).length)}║
-  ║  Health:     http://localhost:${port}/mcp${' '.repeat(14 - String(port).length)}║
-  ║  Refresh:    Every ${config.refreshIntervalMinutes} min${' '.repeat(20 - String(config.refreshIntervalMinutes).length)}║
-  ║  LLM:        ${(config.llm.provider || 'disabled').padEnd(31)}║
-  ║  Telegram:   ${config.telegram.botToken ? 'enabled' : 'disabled'}${' '.repeat(config.telegram.botToken ? 24 : 23)}║
-  ║  Discord:    ${config.discord?.botToken ? 'enabled' : config.discord?.webhookUrl ? 'webhook only' : 'disabled'}${' '.repeat(config.discord?.botToken ? 24 : config.discord?.webhookUrl ? 20 : 23)}║
-  ╚══════════════════════════════════════════════╝
-  `);
+  console.log('\n  ⚡ CRUCIX INTELLIGENCE ENGINE — Local Palantir · 29 Sources\n');
+  console.table({
+    Dashboard: `http://localhost:${port}`,
+    Health:    `http://localhost:${port}/api/health`,
+    MCP:       `http://localhost:${port}/mcp`,
+    Refresh:   `Every ${config.refreshIntervalMinutes} min`,
+    LLM:       config.llm.provider || 'disabled',
+    Telegram:  config.telegram.botToken ? 'enabled' : 'disabled',
+    Discord:   config.discord?.botToken ? 'enabled' : config.discord?.webhookUrl ? 'webhook only' : 'disabled',
+  });
 
   const server = app.listen(port);
 
